@@ -36,12 +36,17 @@ final class FileUploader
             return $known->fileId;
         }
         $checksum = self::checksum($file);
-        $fileId = $known !== null && $known->checksum === $checksum
-            ? $known->fileId
-            : $this->send($file, $gallery, $categoryId, $size);
-        $this->store->save($target, new StoredFile($file->source(), $size, $modifiedAt, $checksum, $fileId));
+        $remember = fn (string $fileId) => $this->store->save(
+            $target,
+            new StoredFile($file->source(), $size, $modifiedAt, $checksum, $fileId),
+        );
+        if ($known !== null && $known->checksum === $checksum) {
+            $remember($known->fileId);
 
-        return $fileId;
+            return $known->fileId;
+        }
+
+        return $this->send($file, $gallery, $categoryId, $size, $remember);
     }
 
     /**
@@ -52,7 +57,7 @@ final class FileUploader
         $this->store->forget($fileIds);
     }
 
-    private function send(FileSource $file, string $gallery, string $categoryId, int $size): string
+    private function send(FileSource $file, string $gallery, string $categoryId, int $size, Closure $remember): string
     {
         $contentType = $file->mimeType();
         $initiated = $this->accepted($file, fn () => $this->client->initiateUpload([
@@ -85,6 +90,7 @@ final class FileUploader
                 fclose($stream);
             }
         }
+        $remember($initiated['fileId']);
         $this->accepted($file, fn () => $this->client->completeUpload($initiated['fileId'], $parts));
 
         return $initiated['fileId'];

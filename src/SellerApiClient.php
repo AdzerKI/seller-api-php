@@ -112,6 +112,11 @@ class SellerApiClient
         return $this->send($request);
     }
 
+    private function sleep(int $millis): void
+    {
+        ($this->sleep)($millis);
+    }
+
     private function json(string $method, string $path, array $body, ?string $idempotencyKey = null): array
     {
         $request = $this->api($method, $path)
@@ -145,7 +150,7 @@ class SellerApiClient
                 if ($attempt >= $times) {
                     throw $failure;
                 }
-                ($this->sleep)($this->config->retrySleepMs);
+                $this->sleep($this->config->retrySleepMs);
 
                 continue;
             }
@@ -156,7 +161,7 @@ class SellerApiClient
             if ($attempt >= $times || ! ApiException::transient($response)) {
                 throw new ApiException($response);
             }
-            ($this->sleep)($this->pause($response));
+            $this->sleep($this->pause($response));
         }
     }
 

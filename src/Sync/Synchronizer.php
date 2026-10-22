@@ -9,7 +9,6 @@ use Opotopo\SellerApi\Catalog\CatalogSource;
 use Opotopo\SellerApi\Catalog\Item;
 use Opotopo\SellerApi\Catalog\ItemBuilder;
 use Opotopo\SellerApi\Catalog\ItemFailure;
-use Opotopo\SellerApi\Files\FileSource;
 use Opotopo\SellerApi\Files\FileUploader;
 use Opotopo\SellerApi\SellerApiClient;
 
@@ -19,7 +18,11 @@ final class Synchronizer
 
     private const FILE_IDS_DETAIL = 'fileIds';
 
+    private const SCAN_REJECTIONS_DETAIL = 'scanRejections';
+
     private const FILE_IDS_SEPARATOR = ',';
+
+    private const REASON_SEPARATOR = ':';
 
     private readonly ItemBuilder $builder;
 
@@ -94,9 +97,10 @@ final class Synchronizer
     {
         $ready = [];
         $payloads = [];
+        $sources = [];
         foreach ($items as $item) {
             try {
-                $payloads[] = $this->payload($item);
+                $payloads[] = $this->payload($item, $sources);
                 $ready[] = $item;
             } catch (ItemFailure $failure) {
                 $this->failed($catalog, $item, $known, $report, $failure);
@@ -125,7 +129,9 @@ final class Synchronizer
         $retry = [];
         foreach ($response['results'] ?? [] as $index => $result) {
             $item = $ready[$index];
-            if (($result['error'] ?? null) === self::FILES_UNAVAILABLE && $reupload) {
+            $result = self::namedScanRejections($result, $sources);
+            $error = $result['error'] ?? null;
+            if ($error === self::FILES_UNAVAILABLE && $reupload) {
                 $this->files->forget(explode(
                     self::FILE_IDS_SEPARATOR,
                     (string) ($result['errorDetails'][self::FILE_IDS_DETAIL] ?? ''),
@@ -141,27 +147,59 @@ final class Synchronizer
         }
     }
 
-    private function payload(Item $item): array
+    /**
+     * @param  array<string, string>  $sources
+     */
+    private function payload(Item $item, array &$sources): array
     {
         $payload = $item->payload;
         if ($item->imageFiles !== []) {
-            $payload['imageFileIds'] = $this->upload($item->imageFiles, FileUploader::MAIN, $item);
+            $payload['imageFileIds'] = $this->upload($item->imageFiles, FileUploader::MAIN, $item, $sources);
         }
         if ($item->secondImageFile !== null) {
-            $payload['secondImageFileId'] = $this->upload([$item->secondImageFile], FileUploader::MAIN, $item)[0];
+            $payload['secondImageFileId'] = $this->upload([$item->secondImageFile], FileUploader::MAIN, $item, $sources)[0];
         }
         foreach ($item->variantFiles as $index => $files) {
             if ($files !== []) {
-                $payload['variants'][$index]['fileIds'] = $this->upload($files, FileUploader::PROJECT, $item);
+                $payload['variants'][$index]['fileIds'] = $this->upload($files, FileUploader::PROJECT, $item, $sources);
             }
         }
 
         return $payload;
     }
 
-    private function upload(array $files, string $gallery, Item $item): array
+    /**
+     * @param  array<string, string>  $sources
+     */
+    private function upload(array $files, string $gallery, Item $item, array &$sources): array
     {
-        return array_map(fn (FileSource $file) => $this->files->upload($file, $gallery, $item->categoryId), $files);
+        $fileIds = [];
+        foreach ($files as $file) {
+            $fileId = $this->files->upload($file, $gallery, $item->categoryId);
+            $sources[$fileId] = $file->source();
+            $fileIds[] = $fileId;
+        }
+
+        return $fileIds;
+    }
+
+    /**
+     * @param  array<string, string>  $sources
+     */
+    private static function namedScanRejections(array $result, array $sources): array
+    {
+        $named = $result['errorDetails'][self::SCAN_REJECTIONS_DETAIL] ?? null;
+        if (! is_string($named) || $named === '') {
+            return $result;
+        }
+        $reasons = [];
+        foreach (explode(self::FILE_IDS_SEPARATOR, $named) as $pair) {
+            [$fileId, $reason] = explode(self::REASON_SEPARATOR, $pair, 2) + [1 => ''];
+            $reasons[$sources[$fileId] ?? $fileId] = $reason;
+        }
+        $result['errorDetails'][self::SCAN_REJECTIONS_DETAIL] = $reasons;
+
+        return $result;
     }
 
     private function applied(string $catalog, Item $item, array $result, array &$known, SyncReport $report): void
