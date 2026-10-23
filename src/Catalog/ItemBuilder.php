@@ -12,7 +12,7 @@ final class ItemBuilder
 {
     private const URL_SCHEMES = ['http://', 'https://'];
 
-    private const NUMERIC_FIELDS = ['price', 'quantity'];
+    private const NUMERIC_FIELDS = ['price', 'quantity', 'updateMonths'];
 
     private const ORIENTATION_AXES = ['rollDeg', 'pitchDeg', 'yawDeg'];
 
@@ -91,6 +91,19 @@ final class ItemBuilder
             }
         }
 
+        $package = $mapping['package'] ?? [];
+        $repositoryPackage = array_filter([
+            'manager' => self::text(self::value($record, $package['manager'] ?? null)),
+            'name' => self::text(self::value($record, $package['name'] ?? null)),
+        ], fn ($value) => $value !== null);
+        if ($repositoryPackage !== []) {
+            $payload['repositoryPackage'] = $repositoryPackage;
+        }
+        $repositoryUrl = self::text(self::value($record, $package['git'] ?? null));
+        if ($repositoryUrl !== null) {
+            $payload['packageGitSource'] = ['repositoryUrl' => $repositoryUrl];
+        }
+
         $variants = [];
         $variantFiles = [];
         foreach ($mapping['variants'] ?? [] as $variant) {
@@ -105,6 +118,7 @@ final class ItemBuilder
                 'price' => $price,
                 'includes3dModel' => (bool) ($variant['includes_3d_model'] ?? false),
                 'fileUrls' => $fileUrls ?: null,
+                'updateMonths' => self::field('updateMonths', self::value($record, $variant['update_months'] ?? null)),
             ], fn ($value) => $value !== null);
             $variantFiles[] = array_values(array_filter($files, fn ($file) => $file instanceof FileSource));
         }

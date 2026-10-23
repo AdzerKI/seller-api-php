@@ -14,6 +14,8 @@ final class SyncReport
 
     public array $failures = [];
 
+    public array $gitSources = [];
+
     public function fail(string $catalog, string $sku, string $error, ?array $details): void
     {
         $this->failures[] = [
@@ -21,6 +23,15 @@ final class SyncReport
             'sku' => $sku,
             'error' => $error,
             'details' => $details ?? [],
+        ];
+    }
+
+    public function gitSource(string $catalog, string $sku, array $source): void
+    {
+        $this->gitSources[] = [
+            'catalog' => $catalog,
+            'sku' => $sku,
+            'source' => $source,
         ];
     }
 }

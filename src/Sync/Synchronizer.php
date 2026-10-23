@@ -220,6 +220,9 @@ final class Synchronizer
             $details,
             $error === null ? new DateTimeImmutable : $state?->syncedAt,
         ));
+        if (isset($result['packageGitSource'])) {
+            $report->gitSource($catalog, $item->sku, $result['packageGitSource']);
+        }
         if ($error !== null) {
             $report->fail($catalog, $item->sku, $error, $details);
         } elseif ($result['created'] ?? false) {
