@@ -19,6 +19,7 @@ final class WebhookReceiver
     public const EVENTS = [
         'order.purchase.created' => PurchaseCreated::class,
         'order.purchase.revoked' => PurchaseRevoked::class,
+        'order.fulfillment.status.changed' => FulfillmentStatusChanged::class,
     ];
 
     public function __construct(

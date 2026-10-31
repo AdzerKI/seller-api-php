@@ -3,6 +3,9 @@
 namespace Opotopo\SellerApi;
 
 use Closure;
+use DateTimeImmutable;
+use DateTimeInterface;
+use DateTimeZone;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Client\NetworkExceptionInterface;
 use Psr\Http\Message\RequestFactoryInterface;
@@ -15,6 +18,8 @@ class SellerApiClient
 {
     public const SYNC_PATH = '/rest/v1/advertisement/seller/ads/sync';
 
+    public const SYNC_CATEGORIES_PATH = '/rest/v1/advertisement/seller/ads/sync/categories';
+
     public const AD_PATH = '/rest/v1/advertisement/seller/ads/';
 
     public const UPLOAD_INITIATE_PATH = '/rest/v1/file/seller/upload/initiate';
@@ -22,6 +27,18 @@ class SellerApiClient
     public const UPLOAD_COMPLETE_PATH = '/rest/v1/file/seller/upload/complete';
 
     public const DATA_DELIVERY_PATH = '/rest/v1/order/seller/fulfillments/%s/data-deliveries';
+
+    public const FULFILLMENTS_PATH = '/rest/v1/order/seller/fulfillments';
+
+    public const FULFILLMENT_PATH = '/rest/v1/order/seller/fulfillments/%s';
+
+    public const DROP_OFF_POINTS_PATH = '/rest/v1/order/seller/fulfillments/%s/drop-off-points';
+
+    public const DISPATCH_PATH = '/rest/v1/order/seller/fulfillments/%s/dispatch';
+
+    public const CANCEL_PATH = '/rest/v1/order/seller/fulfillments/%s/cancel';
+
+    public const SHIPMENT_DOCUMENT_PATH = '/rest/v1/logistics/seller/shipments/%s/document';
 
     public const API_KEY_HEADER = 'X-API-Key';
 
@@ -36,6 +53,10 @@ class SellerApiClient
     private const JSON = 'application/json';
 
     private const OCTET_STREAM = 'application/octet-stream';
+
+    private const PDF = 'application/pdf';
+
+    private const INSTANT = 'Y-m-d\TH:i:s.v\Z';
 
     private const NOT_FOUND = 404;
 
@@ -64,6 +85,14 @@ class SellerApiClient
         ], fn ($value) => $value !== null), $idempotencyKey);
     }
 
+    public function syncCategories(array $items): array
+    {
+        return $this->json('POST', self::SYNC_CATEGORIES_PATH, array_filter([
+            'items' => $items,
+            'organizationId' => $this->config->organizationId,
+        ], fn ($value) => $value !== null));
+    }
+
     public function archive(string $advertisementId): void
     {
         try {
@@ -90,14 +119,56 @@ class SellerApiClient
 
     public function deliverData(string $fulfillmentId, ?string $value, ?string $replacedDeliveryId = null): array
     {
-        $request = ['value' => $value, 'replacedDeliveryId' => $replacedDeliveryId];
+        return $this->action(self::DATA_DELIVERY_PATH, $fulfillmentId, ['value' => $value, 'replacedDeliveryId' => $replacedDeliveryId]);
+    }
 
-        return $this->json(
-            'POST',
-            sprintf(self::DATA_DELIVERY_PATH, rawurlencode($fulfillmentId)),
-            $request,
-            hash('sha256', $fulfillmentId.json_encode($request, JSON_THROW_ON_ERROR)),
-        );
+    public function fulfillments(
+        array $statuses = [],
+        ?DateTimeInterface $from = null,
+        ?DateTimeInterface $to = null,
+        int $page = 0,
+        int $size = 20,
+    ): array {
+        $query = array_filter([
+            'organizationId' => $this->config->organizationId,
+            'from' => $from === null ? null : self::instant($from),
+            'to' => $to === null ? null : self::instant($to),
+            'page' => $page,
+            'size' => $size,
+        ], fn ($value) => $value !== null);
+        $parameters = [http_build_query($query)];
+        foreach ($statuses as $status) {
+            $parameters[] = 'status='.rawurlencode($status);
+        }
+
+        return ApiException::decode($this->send($this->api('GET', self::FULFILLMENTS_PATH.'?'.implode('&', $parameters))));
+    }
+
+    public function fulfillment(string $fulfillmentId): array
+    {
+        return ApiException::decode($this->send($this->api('GET', sprintf(self::FULFILLMENT_PATH, rawurlencode($fulfillmentId)))));
+    }
+
+    public function dropOffPoints(string $fulfillmentId): array
+    {
+        return ApiException::decode($this->send($this->api('GET', sprintf(self::DROP_OFF_POINTS_PATH, rawurlencode($fulfillmentId)))));
+    }
+
+    public function dispatch(string $fulfillmentId, array $request): array
+    {
+        return $this->action(self::DISPATCH_PATH, $fulfillmentId, $request);
+    }
+
+    public function cancel(string $fulfillmentId, ?string $reason = null): array
+    {
+        return $this->action(self::CANCEL_PATH, $fulfillmentId, ['reason' => $reason]);
+    }
+
+    public function shipmentDocument(string $shipmentId, string $type): StreamInterface
+    {
+        $path = sprintf(self::SHIPMENT_DOCUMENT_PATH, rawurlencode($shipmentId)).'?'.http_build_query(['type' => $type]);
+
+        return $this->send($this->api('GET', $path)->withHeader(self::ACCEPT_HEADER, self::PDF))->getBody();
     }
 
     public function put(string $url, array $headers, StreamInterface|string $content): ResponseInterface
@@ -117,11 +188,26 @@ class SellerApiClient
         ($this->sleep)($millis);
     }
 
+    private function action(string $path, string $fulfillmentId, array $request): array
+    {
+        return $this->json(
+            'POST',
+            sprintf($path, rawurlencode($fulfillmentId)),
+            $request,
+            hash('sha256', $fulfillmentId.$path.json_encode($request, JSON_THROW_ON_ERROR)),
+        );
+    }
+
+    private static function instant(DateTimeInterface $moment): string
+    {
+        return DateTimeImmutable::createFromInterface($moment)->setTimezone(new DateTimeZone('UTC'))->format(self::INSTANT);
+    }
+
     private function json(string $method, string $path, array $body, ?string $idempotencyKey = null): array
     {
         $request = $this->api($method, $path)
             ->withHeader(self::CONTENT_TYPE_HEADER, self::JSON)
-            ->withBody($this->streams->createStream(json_encode($body, JSON_THROW_ON_ERROR)));
+            ->withBody($this->streams->createStream(json_encode((object) $body, JSON_THROW_ON_ERROR)));
         if ($idempotencyKey !== null) {
             $request = $request->withHeader(self::IDEMPOTENCY_HEADER, $idempotencyKey);
         }

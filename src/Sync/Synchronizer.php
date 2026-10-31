@@ -95,12 +95,19 @@ final class Synchronizer
 
     private function send(string $catalog, array $items, array &$known, SyncReport $report, bool $reupload): void
     {
+        try {
+            $categories = $this->categories($items);
+        } catch (ApiException $failure) {
+            $this->rejected($catalog, $items, $known, $report, $reupload, $failure);
+
+            return;
+        }
         $ready = [];
         $payloads = [];
         $sources = [];
-        foreach ($items as $item) {
+        foreach ($items as $index => $item) {
             try {
-                $payloads[] = $this->payload($item, $sources);
+                $payloads[] = $this->payload($item, $categories[$index] ?? null, $sources);
                 $ready[] = $item;
             } catch (ItemFailure $failure) {
                 $this->failed($catalog, $item, $known, $report, $failure);
@@ -112,17 +119,7 @@ final class Synchronizer
         try {
             $response = $this->client->sync($payloads, self::idempotencyKey());
         } catch (ApiException $failure) {
-            if (! $failure->rejected()) {
-                throw $failure;
-            }
-            if (count($ready) > 1) {
-                foreach ($ready as $item) {
-                    $this->send($catalog, [$item], $known, $report, $reupload);
-                }
-
-                return;
-            }
-            $this->failed($catalog, $ready[0], $known, $report, ItemFailure::fromApi($failure));
+            $this->rejected($catalog, $ready, $known, $report, $reupload, $failure);
 
             return;
         }
@@ -147,21 +144,68 @@ final class Synchronizer
         }
     }
 
+    private function rejected(string $catalog, array $items, array &$known, SyncReport $report, bool $reupload, ApiException $failure): void
+    {
+        if (! $failure->rejected()) {
+            throw $failure;
+        }
+        if (count($items) > 1) {
+            foreach ($items as $item) {
+                $this->send($catalog, [$item], $known, $report, $reupload);
+            }
+
+            return;
+        }
+        $this->failed($catalog, $items[0], $known, $report, ItemFailure::fromApi($failure));
+    }
+
+    /**
+     * @return array<int, string|ItemFailure>
+     */
+    private function categories(array $items): array
+    {
+        $withFiles = array_filter($items, fn (Item $item) => $item->hasFiles());
+        if ($withFiles === []) {
+            return [];
+        }
+        $response = $this->client->syncCategories(array_values(array_map(fn (Item $item) => $item->payload, $withFiles)));
+        $categories = [];
+        foreach (array_keys($withFiles) as $position => $index) {
+            $result = $response['results'][$position] ?? [];
+            $categories[$index] = isset($result['categoryId'])
+                ? (string) $result['categoryId']
+                : new ItemFailure((string) ($result['error'] ?? ItemFailure::VALIDATION_ERROR), $result['errorDetails'] ?? []);
+        }
+
+        return $categories;
+    }
+
     /**
      * @param  array<string, string>  $sources
      */
-    private function payload(Item $item, array &$sources): array
+    private function payload(Item $item, string|ItemFailure|null $categoryId, array &$sources): array
     {
         $payload = $item->payload;
+        if ($categoryId instanceof ItemFailure) {
+            throw $categoryId;
+        }
+        if ($categoryId === null) {
+            return $payload;
+        }
         if ($item->imageFiles !== []) {
-            $payload['imageFileIds'] = $this->upload($item->imageFiles, FileUploader::MAIN, $item, $sources);
+            $payload['imageFileIds'] = $this->upload($item->imageFiles, FileUploader::MAIN, $categoryId, $sources);
         }
         if ($item->secondImageFile !== null) {
-            $payload['secondImageFileId'] = $this->upload([$item->secondImageFile], FileUploader::MAIN, $item, $sources)[0];
+            $payload['secondImageFileId'] = $this->upload([$item->secondImageFile], FileUploader::MAIN, $categoryId, $sources)[0];
         }
         foreach ($item->variantFiles as $index => $files) {
             if ($files !== []) {
-                $payload['variants'][$index]['fileIds'] = $this->upload($files, FileUploader::PROJECT, $item, $sources);
+                $payload['variants'][$index]['fileIds'] = $this->upload($files, FileUploader::PROJECT, $categoryId, $sources);
+            }
+        }
+        foreach ($item->variantImageFiles as $index => $image) {
+            if ($image !== null) {
+                $payload['variants'][$index]['imageFileId'] = $this->upload([$image], FileUploader::MAIN, $categoryId, $sources)[0];
             }
         }
 
@@ -171,11 +215,11 @@ final class Synchronizer
     /**
      * @param  array<string, string>  $sources
      */
-    private function upload(array $files, string $gallery, Item $item, array &$sources): array
+    private function upload(array $files, string $gallery, string $categoryId, array &$sources): array
     {
         $fileIds = [];
         foreach ($files as $file) {
-            $fileId = $this->files->upload($file, $gallery, $item->categoryId);
+            $fileId = $this->files->upload($file, $gallery, $categoryId);
             $sources[$fileId] = $file->source();
             $fileIds[] = $fileId;
         }
