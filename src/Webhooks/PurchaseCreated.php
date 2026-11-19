@@ -14,7 +14,7 @@ final class PurchaseCreated
         public readonly string $advertisementId,
         public readonly ?int $advertisementNumber,
         public readonly ?string $variantId,
-        public readonly int $quantity,
+        public readonly int|float $quantity,
         public readonly int|float $amount,
         public readonly string $delivery,
         public readonly DateTimeImmutable $purchasedAt,

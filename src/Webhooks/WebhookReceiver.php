@@ -34,7 +34,7 @@ final class WebhookReceiver
             fn ($value) => is_string($value) && $value !== '',
         );
         try {
-            $payload = $this->verify($body, $headers);
+            $payload = (new Webhook($this->secret))->verify($body, $headers);
         } catch (WebhookVerificationException|WebhookSigningException) {
             return WebhookResult::Unauthorized;
         }
@@ -56,21 +56,5 @@ final class WebhookReceiver
         }
 
         return WebhookResult::Handled;
-    }
-
-    // standard-webhooks/standard-webhooks#343
-    private function verify(string $body, array $headers): array
-    {
-        $webhook = new Webhook($this->secret);
-        if (isset($headers[self::ID_HEADER], $headers[self::TIMESTAMP_HEADER], $headers[self::SIGNATURE_HEADER])) {
-            $expected = $webhook->sign($headers[self::ID_HEADER], $headers[self::TIMESTAMP_HEADER], $body);
-            $passed = explode(' ', $headers[self::SIGNATURE_HEADER]);
-            if (! array_filter($passed, fn (string $signature) => hash_equals($expected, $signature))) {
-                throw new WebhookVerificationException('No matching signature found');
-            }
-            $headers[self::SIGNATURE_HEADER] = $expected;
-        }
-
-        return $webhook->verify($body, $headers);
     }
 }
