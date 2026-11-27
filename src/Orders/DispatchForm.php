@@ -3,6 +3,7 @@
 namespace Opotopo\SellerApi\Orders;
 
 use Opotopo\SellerApi\Catalog\Parcel;
+use Opotopo\SellerApi\JsonNumber;
 
 final class DispatchForm
 {
@@ -29,18 +30,32 @@ final class DispatchForm
      * @param  callable(float): float  $centimeters
      *
      * @throws InvalidPlace
+     * @throws MissingTrackingNumber
      */
     public static function request(array $fulfillment, array $fields, array $places, callable $grams, callable $centimeters): array
     {
         $method = $fulfillment['method'];
 
         return match (true) {
-            $method === self::OWN_DELIVERY => self::texts($fields, self::TRACKING),
+            $method === self::OWN_DELIVERY => self::tracking($fulfillment, $fields),
             in_array($method, self::CARRIER, true) => array_filter(
                 self::texts($fields, [self::DROP_OFF_POINT]) + ['places' => self::places($fulfillment, $places, $grams, $centimeters)],
             ),
             default => [],
         };
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function tracking(array $fulfillment, array $fields): array
+    {
+        $tracking = self::texts($fields, self::TRACKING);
+        if ($fulfillment['trackingRequired'] && ! isset($tracking['trackingNumber'])) {
+            throw new MissingTrackingNumber;
+        }
+
+        return $tracking;
     }
 
     /**
@@ -66,8 +81,8 @@ final class DispatchForm
         $requested = [];
         foreach (array_values($places) as $index => $place) {
             $quantities = array_filter(
-                array_map('intval', array_intersect_key((array) ($place[self::LINES] ?? []), $lines)),
-                static fn (int $quantity) => $quantity > 0,
+                array_map(JsonNumber::of(...), array_intersect_key((array) ($place[self::LINES] ?? []), $lines)),
+                static fn (int|float|null $quantity) => $quantity > 0,
             );
             $sizes = array_map(static fn (string $size) => trim((string) ($place[$size] ?? '')), self::SIZES);
             if ($quantities === [] && implode('', $sizes) === '') {
@@ -81,7 +96,7 @@ final class DispatchForm
             $requested[] = [
                 'parcel' => $parcel,
                 'lines' => array_map(
-                    static fn (string|int $lineId, int $quantity) => ['lineId' => (string) $lineId, 'quantity' => $quantity],
+                    static fn (string|int $lineId, int|float $quantity) => ['lineId' => (string) $lineId, 'quantity' => $quantity],
                     array_keys($quantities),
                     $quantities,
                 ),

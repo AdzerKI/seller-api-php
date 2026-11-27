@@ -126,8 +126,8 @@ class SellerApiClient
         array $statuses = [],
         ?DateTimeInterface $from = null,
         ?DateTimeInterface $to = null,
-        int $page = 0,
-        int $size = 20,
+        ?int $page = null,
+        ?int $size = null,
     ): array {
         $query = array_filter([
             'organizationId' => $this->config->organizationId,

@@ -5,6 +5,7 @@ namespace Opotopo\SellerApi\Catalog;
 use BackedEnum;
 use InvalidArgumentException;
 use Opotopo\SellerApi\Files\FileSource;
+use Opotopo\SellerApi\JsonNumber;
 use SplFileInfo;
 use Stringable;
 use Traversable;
@@ -290,19 +291,11 @@ final class ItemBuilder
             return $value;
         }
         if (is_float($value)) {
-            return self::number($value);
+            return JsonNumber::of($value);
         }
         $text = (string) $value;
-        if (in_array($field, self::NUMERIC_FIELDS, true) && is_numeric($text)) {
-            return self::number($text + 0);
-        }
 
-        return $text;
-    }
-
-    private static function number(int|float $value): int|float
-    {
-        return is_float($value) && $value == (int) $value ? (int) $value : $value;
+        return in_array($field, self::NUMERIC_FIELDS, true) ? JsonNumber::of($text) ?? $text : $text;
     }
 
     private static function text(mixed $value): ?string

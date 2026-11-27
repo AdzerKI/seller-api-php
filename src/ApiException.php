@@ -14,6 +14,8 @@ final class ApiException extends RuntimeException
 
     private const REQUEST_IN_FLIGHT = 'IDEMPOTENCY_REQUEST_IN_FLIGHT';
 
+    private const CONTENT_REJECTIONS = [400, 413, 422];
+
     public function __construct(public readonly ResponseInterface $response)
     {
         parent::__construct($response->getStatusCode().' '.$response->getReasonPhrase(), $response->getStatusCode());
@@ -32,6 +34,11 @@ final class ApiException extends RuntimeException
     public function rejected(): bool
     {
         return $this->status() >= 400 && $this->status() < 500 && ! self::transient($this->response);
+    }
+
+    public function invalid(): bool
+    {
+        return in_array($this->status(), self::CONTENT_REJECTIONS, true);
     }
 
     public static function transient(ResponseInterface $response): bool

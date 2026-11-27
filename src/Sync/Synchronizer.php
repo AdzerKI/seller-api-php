@@ -9,6 +9,7 @@ use Opotopo\SellerApi\Catalog\CatalogSource;
 use Opotopo\SellerApi\Catalog\Item;
 use Opotopo\SellerApi\Catalog\ItemBuilder;
 use Opotopo\SellerApi\Catalog\ItemFailure;
+use Opotopo\SellerApi\Catalog\KeyedCatalogSource;
 use Opotopo\SellerApi\Files\FileUploader;
 use Opotopo\SellerApi\SellerApiClient;
 
@@ -43,21 +44,32 @@ final class Synchronizer
         $report = new SyncReport;
         foreach ($catalogs as $name => $catalog) {
             if ($only === null || $only === (string) $name) {
-                $this->catalog((string) $name, $catalog, $full, $report);
+                $this->catalog((string) $name, $catalog, $catalog->records(), null, $full, $report);
             }
         }
 
         return $report;
     }
 
-    private function catalog(string $name, CatalogSource $catalog, bool $full, SyncReport $report): void
+    public function runKeys(string $name, KeyedCatalogSource $catalog, array $keys): SyncReport
+    {
+        $report = new SyncReport;
+        $keys = array_values(array_unique(array_map('strval', $keys)));
+        if ($keys !== []) {
+            $this->catalog($name, $catalog, $catalog->recordsOf($keys), $keys, false, $report);
+        }
+
+        return $report;
+    }
+
+    private function catalog(string $name, CatalogSource $catalog, iterable $records, ?array $keys, bool $full, SyncReport $report): void
     {
         $known = $this->store->load($name);
         $mapping = $catalog->mapping();
         $seen = [];
         $pending = [];
         $batch = max(1, $this->batch);
-        foreach ($catalog->records() as $record) {
+        foreach ($records as $record) {
             $item = $this->builder->build($record, $mapping);
             $seen[$item->key] = true;
             $state = $known[$item->key] ?? null;
@@ -80,7 +92,7 @@ final class Synchronizer
         if ($pending !== []) {
             $this->send($name, $pending, $known, $report, true);
         }
-        $gone = array_diff_key($known, $seen);
+        $gone = array_diff_key($keys === null ? $known : array_intersect_key($known, array_flip($keys)), $seen);
         if ($gone === []) {
             return;
         }
@@ -146,7 +158,7 @@ final class Synchronizer
 
     private function rejected(string $catalog, array $items, array &$known, SyncReport $report, bool $reupload, ApiException $failure): void
     {
-        if (! $failure->rejected()) {
+        if (! $failure->invalid()) {
             throw $failure;
         }
         if (count($items) > 1) {

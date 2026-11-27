@@ -27,15 +27,16 @@ final class WebhookReceiver
         private readonly DeliveryStore $deliveries,
     ) {}
 
+    public function authentic(string $body, array $headers): bool
+    {
+        return $this->payload($body, self::present($headers)) !== null;
+    }
+
     public function receive(string $body, array $headers, callable $handler): WebhookResult
     {
-        $headers = array_filter(
-            array_change_key_case($headers),
-            fn ($value) => is_string($value) && $value !== '',
-        );
-        try {
-            $payload = (new Webhook($this->secret))->verify($body, $headers);
-        } catch (WebhookVerificationException|WebhookSigningException) {
+        $headers = self::present($headers);
+        $payload = $this->payload($body, $headers);
+        if ($payload === null) {
             return WebhookResult::Unauthorized;
         }
         $event = self::EVENTS[(string) ($payload['type'] ?? '')] ?? null;
@@ -56,5 +57,22 @@ final class WebhookReceiver
         }
 
         return WebhookResult::Handled;
+    }
+
+    private static function present(array $headers): array
+    {
+        return array_filter(
+            array_change_key_case($headers),
+            fn ($value) => is_string($value) && $value !== '',
+        );
+    }
+
+    private function payload(string $body, array $headers): ?array
+    {
+        try {
+            return (new Webhook($this->secret))->verify($body, $headers);
+        } catch (WebhookVerificationException|WebhookSigningException) {
+            return null;
+        }
     }
 }
